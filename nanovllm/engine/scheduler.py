@@ -94,12 +94,13 @@ class Scheduler:
     def postprocess(self, seqs: list[Sequence], token_ids: list[int], seq_need_compute_logits) -> list[bool]:
         assert len(token_ids) == len(seq_need_compute_logits)
         for seq_index, token_id in zip(seq_need_compute_logits, token_ids):
-            seqs[seq_index].append_token(token_id)
-            if (not seqs[seq_index].ignore_eos and token_id == self.eos) or \
-                seqs[seq_index].num_completion_tokens == seq.max_tokens or \
-                    len(seqs[seq_index]) >= self.max_model_len:
-                if len(seqs[seq_index]) >= self.max_model_len:
-                    print(f"Sequence {seqs[seq_index].seq_id} reached max_model_len {self.max_model_len}.")
+            seq = seqs[seq_index]
+            seq.append_token(token_id)
+            if (not seq.ignore_eos and token_id == self.eos) or \
+                seq.num_completion_tokens == seq.max_tokens or \
+                    len(seq) >= self.max_model_len:
+                if len(seq) >= self.max_model_len:
+                    print(f"Sequence {seq.seq_id} reached max_model_len {self.max_model_len}.")
                 seq.status = SequenceStatus.FINISHED
                 self.block_manager.deallocate(seq)
                 self.running.remove(seq)
