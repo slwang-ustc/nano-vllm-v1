@@ -13,6 +13,27 @@ class Context:
     block_tables: torch.Tensor | None = None
     seq_need_compute_logits: torch.Tensor | None = None
 
+
+    @property
+
+    def is_pure_decode(self) -> bool:
+
+        """True when this is a decode-only batch with no prefill tokens.
+
+        During CUDA graph capture and replay, set_context() is called without
+
+        cu_seqlens_q (it remains None). At runtime, _is_decode_only() in
+
+        ModelRunner guarantees graph replay only happens for pure-decode batches,
+
+        so cu_seqlens_q being None is a reliable signal for the attention layer
+
+        to select the graph-compatible flash_attn_with_kvcache path.
+
+        """
+
+        return self.cu_seqlens_q is None
+
 _CONTEXT = Context()
 
 def get_context():

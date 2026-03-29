@@ -196,29 +196,55 @@ class ModelRunner:
             temperatures = temperatures[context.seq_need_compute_logits]
         return temperatures
 
+    def _is_decode_only(self, seqs: list) -> bool:
+        """Return True only when every sequence in the batch is in pure decode
+        mode (num_new_tokens == 1, i.e. no chunked-prefill tokens in flight).
+
+        CUDA graphs require static tensor shapes, so we can only replay a
+        captured graph when the batch is homogeneously decode-step sequences.
+        Any prefill token – whether it is a first-prefill, a chunked-prefill
+        continuation, or a mixed prefill+decode batch – must fall back to
+        eager execution.
+        """
+        return all(seq.num_new_tokens == 1 for seq in seqs)
+
     @torch.inference_mode()
-    def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor):
-        if self.enforce_eager or input_ids.size(0) > 512:
+    def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, seqs: list = None):
+        context = get_context()
+
+        # Use CUDA graph only for pure decode-only batches with static shapes.
+        # Chunked-prefill batches have variable seqlen_q > 1 and mixed
+        # prefill/decode sequences, which break the static-shape requirement
+        # of CUDA graph replay.
+        use_graph = (
+            not self.enforce_eager
+            and input_ids.size(0) <= 512
+            and seqs is not None
+            and self._is_decode_only(seqs)
+        )
+
+        if not use_graph:
             return self.model.compute_logits(self.model(input_ids, positions))
-        else:
-            bs = input_ids.size(0)
-            context = get_context()
-            graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
-            graph_vars = self.graph_vars
-            graph_vars["input_ids"][:bs] = input_ids
-            graph_vars["positions"][:bs] = positions
-            graph_vars["slot_mapping"].fill_(-1)
-            graph_vars["slot_mapping"][:bs] = context.slot_mapping
-            graph_vars["context_lens"].zero_()
-            graph_vars["context_lens"][:bs] = context.context_lens
-            graph_vars["block_tables"][:bs, :context.block_tables.size(1)] = context.block_tables
-            graph.replay()
-            return self.model.compute_logits(graph_vars["outputs"][:bs])
+
+        # --- CUDA graph replay path (decode-only) ---
+        bs = input_ids.size(0)
+        graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
+        graph_vars = self.graph_vars
+        graph_vars["input_ids"][:bs] = input_ids
+        graph_vars["positions"][:bs] = positions
+        graph_vars["slot_mapping"].fill_(-1)
+        graph_vars["slot_mapping"][:bs] = context.slot_mapping
+        graph_vars["context_lens"].zero_()
+        graph_vars["context_lens"][:bs] = context.context_lens
+        graph_vars["block_tables"].zero_()
+        graph_vars["block_tables"][:bs, :context.block_tables.size(1)] = context.block_tables
+        graph.replay()
+        return self.model.compute_logits(graph_vars["outputs"][:bs])
 
     def run(self, seqs: list[Sequence]) -> list[int]:
         input_ids, positions = self.prepare_model_input(seqs)
         temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
-        logits = self.run_model(input_ids, positions)
+        logits = self.run_model(input_ids, positions, seqs)
         token_ids = self.sampler(logits, temperatures).tolist() if self.rank == 0 else None
         seq_need_compute_logits = get_context().seq_need_compute_logits
         reset_context()
@@ -226,6 +252,17 @@ class ModelRunner:
 
     @torch.inference_mode()
     def capture_cudagraph(self):
+        """Capture CUDA graphs for the decode-only case.
+
+        Graphs are only replayed when every sequence in the batch has
+        ``num_new_tokens == 1`` (pure decode step, no chunked prefill).
+        During prefill – including chunked-prefill iterations – the engine
+        falls back to eager execution, so the captured graphs never receive
+        variable-length prefill inputs.
+
+        Capture is performed for a set of bucket batch-sizes so that we can
+        always find the smallest bucket >= the live batch size at replay time.
+        """
         config = self.config
         hf_config = config.hf_config
         max_bs = min(self.config.max_num_seqs, 512)

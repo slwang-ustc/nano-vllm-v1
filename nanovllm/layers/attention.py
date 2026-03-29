@@ -62,10 +62,27 @@ class Attention(nn.Module):
         if k_cache.numel() and v_cache.numel():
             store_kvcache(k, v, k_cache, v_cache, context.slot_mapping)
 
-        if context.block_tables is not None:    # prefix cache
-            k, v = k_cache, v_cache
-        o = flash_attn_varlen_func(q, k, v,
-                                    max_seqlen_q=context.max_seqlen_q, cu_seqlens_q=context.cu_seqlens_q,
-                                    max_seqlen_k=context.max_seqlen_k, cu_seqlens_k=context.cu_seqlens_k,
-                                    softmax_scale=self.scale, causal=True, block_table=context.block_tables)
+        if context.is_pure_decode:
+            # Decode-only: all inputs are static-shape tensors already in
+            # graph_vars, so this path is safe for CUDA graph replay.
+            # flash_attn_with_kvcache expects q: [bs, seqlen_q, nheads, d]
+            # but our q is [bs, nheads, d], so unsqueeze the seqlen dim.
+            o = flash_attn_with_kvcache(
+                q.unsqueeze(1), k_cache, v_cache,
+                cache_seqlens=context.context_lens,
+                block_table=context.block_tables,
+                softmax_scale=self.scale,
+                causal=True,
+            )
+            o = o.squeeze(1)  # [bs, 1, nheads, d] -> [bs, nheads, d]
+        else:
+            # Prefill or chunked-prefill: variable seqlen, eager only.
+            if context.block_tables is not None:    # prefix cache
+                k, v = k_cache, v_cache
+            o = flash_attn_varlen_func(
+                q, k, v,
+                max_seqlen_q=context.max_seqlen_q, cu_seqlens_q=context.cu_seqlens_q,
+                max_seqlen_k=context.max_seqlen_k, cu_seqlens_k=context.cu_seqlens_k,
+                softmax_scale=self.scale, causal=True, block_table=context.block_tables,
+            )
         return o
