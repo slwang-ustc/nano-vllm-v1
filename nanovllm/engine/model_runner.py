@@ -192,8 +192,7 @@ class ModelRunner:
         for seq in seqs:
             temperatures.append(seq.temperature)
         temperatures = torch.tensor(temperatures, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True)
-        if context.seq_need_compute_logits.numel():
-            temperatures = temperatures[context.seq_need_compute_logits]
+        temperatures = temperatures[context.seq_need_compute_logits]
         return temperatures
 
     @torch.inference_mode()

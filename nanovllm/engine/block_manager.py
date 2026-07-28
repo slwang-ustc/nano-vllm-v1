@@ -126,8 +126,10 @@ class BlockManager:
         # allocate new_blocks
         for i in range(seq.num_cached_tokens, seq.num_cached_tokens + seq.num_new_tokens, self.block_size):
             token_ids = seq[i: min(i + self.block_size, seq.num_cached_tokens + seq.num_new_tokens)]
-            if i != seq.num_cached_tokens:
-                h = self.compute_hash(token_ids, h) if len(token_ids) == self.block_size else -1
+            if len(token_ids) != self.block_size:
+                h = -1
+            elif i != seq.num_cached_tokens:
+                h = self.compute_hash(token_ids, h)
             block_id = self.free_block_ids[0]
             block = self._allocate_block(block_id)
             if h != -1:
