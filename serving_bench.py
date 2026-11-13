@@ -54,7 +54,7 @@ def warm_up(engine, args):
     # prompts = [[randint(0, 10000) for _ in range(randint(100, MAX_INPUT_LEN))] for _ in range(NUM_REQUESTS)]
     prompts = [[randint(0, 10000) for _ in range(args.random_input_len)] for _ in range(50)]
     # sampling_params = [SamplingParams(temperature=0.6, ignore_eos=True, max_tokens=randint(100, MAX_OUTPUT_LEN)) for _ in range(NUM_REQUESTS)]
-    sampling_params = [SamplingParams(temperature=0.6, ignore_eos=True, max_tokens=args.random_output_len) for _ in range(args.num_requests)]
+    sampling_params = [SamplingParams(temperature=0.6, ignore_eos=True, max_tokens=args.random_output_len) for _ in range(len(prompts))]
     outputs = engine.generate(prompts, sampling_params)
     
 

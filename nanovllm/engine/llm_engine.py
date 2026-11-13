@@ -62,6 +62,14 @@ class LLMEngine:
         sampling_params: SamplingParams | list[SamplingParams],
         use_tqdm: bool = True,
     ) -> list[str]:
+        """Generate outputs with shared or per-prompt sampling parameters.
+
+        A parameter list must contain exactly one entry for each prompt.
+        """
+        if isinstance(sampling_params, list) and len(sampling_params) != len(prompts):
+            raise ValueError(
+                f"Expected {len(prompts)} sampling parameters, got {len(sampling_params)}"
+            )
         if use_tqdm:
             pbar = tqdm(total=len(prompts), desc="Generating", dynamic_ncols=True)
         if not isinstance(sampling_params, list):
